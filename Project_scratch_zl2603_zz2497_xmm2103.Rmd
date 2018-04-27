@@ -1,0 +1,469 @@
+---
+title: "Final Project"
+output: html_document
+---
+
+# 1. Introduction (including choice of data, questions), Team description
+
+When people choose to have meals at restaurants, many factors influence people's preference, such as the taste, environment and price. Food hygiene is one of these important factors. Fortunately, when people walk into a restaurant, there is usually a grade of restaurant hygiene at some obvious place. Usually, the grade will be an A in blue, or occasionally a B in green or a C in yellow. 
+
+These grades are based on inspections of the New York City Department of Mental of Health and Mental Hygiene (DOHMH). This simple grade turns out to depend on a complicated inspection and scoring system. Every restaurant in the New York city is scheduled for unannounced inspections at least once a year. An inspector checks restaurant's compliance with food safety regulations of the city and the state, marking points for any violations. The lower the total score is, the cleaner the restaurant is. In the initial inspection, the restaurant will receive a grade of A if the score is below or equal to 13. Otherwise, there will be a re-inspection shortly after the initial one. During the re-inspection, the restaurant will receive an A if the score is in range of 0 to 13, a B if the score is in range of 14 to 28, and a C if the score is higher than 28. The time of next inspection for a restaurant after receiving a grade is based on the score of the initial inspection. During any inspection, if there is uncorrected public hazard found, DOHMH can force a restaurant to close. Details about information could be found [here](http://www1.nyc.gov/assets/doh/downloads/pdf/rii/inspection-cycle-overview.pdf)
+
+In this project, we are interested in studying the performance of restaurant on the hygiene inspections and how factors, such as borough, cuisine type and inspection time may affect the inspection result. After this general study, we conduct a case study of food hygiene situation for fast food chains.
+
+## Team members and contribution:
+
+1. Zixuan Li (zl2603): Finished most R code (Except time series part) for data processing and visualization. Wrote majority of part 1, 3, 4, 5 of the report. Edited and proofread the report.
+
+2. Zhaoxi Zheng (zz2497): Finished the interactive part of the project. Wrote majority of part 2, 6, 7 of the report.
+
+3. Xiangzi Meng (xmm2103): Finished R code for time series analysis. Wrote analysis for time series part in part 4 of the project.
+
+# 2. Description of Data
+
+Our dataset is the DOHMH New York City Restaurant Inspection Results, which is available [here](https://data.cityofnewyork.us/Health/DOHMH-New-York-City-Restaurant-Inspection-Results/43nn-pn8j) 
+
+The dataset contains 374 thousands rows and 18 columns; each row corresponds to an violation record of a restaurant in an inspection. A restaurant may have multiple inspections in the dataset, and for an inspection, there maybe multiple violation records.
+
+The important columns that we used in the study are:
+
+1. 'CAMIS': The unique identifier for the restaurant, ID
+2. 'BORO': Borough in which the restaurant is located, which may be MANHATTAN, BRONX, BROOKLYN, QUEENS or STATEN ISLAND
+3. 'CUISINE DESCRIPTION': The restaurant cuisine type
+4. 'INSPECTION DATE': The date of inspection. NOTE: Inspection dates of 1/1/1900 mean an establishment has not yet had an inspection.
+5. 'VIOLATION CODE': Each violation code associated with a restaurant inspection.
+6. 'VIOLATION DESCRIPTION': The description of the violation codes
+7. 'CRITICAL FLAG': Critical violations are those most likely to contribute to foodborne illness.
+8. 'SCORE': Total score for a particular inspection; updated based on adjudication results.
+9. 'GRADE': The grade associated with this inspection. Grades given during a reopening inspection are derived from the previous re-inspection. The following are possible values:
+• Not Yet Graded
+• A = Grade A
+• B = Grade B
+• C = Grade C
+• Z = Grade Pending
+• P = Grade Pending issued on re-opening following an initial inspection that resulted in a closure
+
+# 3. Analysis of data quality
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE,
+                      message = FALSE, 
+                      cache = TRUE)
+## Load Data
+
+library(tidyverse)
+
+raw <- read.csv("data/DOHMH_New_York_City_Restaurant_Inspection_Results.csv")
+```
+
+After grouping by each restaurant and inspection date, we found there are much data missing in the dataset. The following graph illustrates how the data is missing. Most rows has no missing data, but there are also many rows with missing grade. This is, however, expected, since the Health Department sometimes does not give a grade at the inspection. For initial inspection, the only grade will be given is A. Although, the description of the data says a grade of Not Yet Graded will indicate this kind of situation, we found there are not so many such records in the grade column. One possible explanation for this is that most missing grade means a grade is not given. The score column of the data has much less missing data. Each inspection, for most of time, does result in a score. If the restaurant is forced to be closed because of uncorrected health hazard, or if the restaurant is moved or closed due to other reasons, the score will be missing. Nonetheless, some missing scores are not caused by these reasons. Sometimes, a score is missing when there is an inspection, but fortunately, this situation appears rarely in the data. Overall the dataset has only a small percentage of missing data.
+
+```{r, fig.width=6, }
+score_na <- raw %>% filter(is.na(SCORE))
+grade_emp <- raw %>% filter(GRADE == "")
+
+library(extracat)
+
+ref_withna <- raw %>% group_by(CAMIS, INSPECTION.DATE) %>%
+   summarise(Score = first(SCORE), Boro = first(BORO), Type = first(CUISINE.DESCRIPTION), Grade = first(GRADE))
+
+ref_withna$Grade[ref_withna$Grade==""] <- NA
+
+visna(ref_withna)
+```
+
+
+When we look at the missing value in original dataset (before grouping by), the pattern is similar to the data after group by operation. There are a lot missing in grade and some missing in score, but these are expected. Most of the attributes that we are interested in studying, such as ID, Borough, cuisine type and inspection date has no missing data at all. Violation code has a few missing values, less than that of score. 
+
+```{r, fig.width=6, fig.height=8}
+raw_na <- raw
+raw_na[raw_na==""] <- NA
+
+visna(raw_na)
+```
+
+A minor problem of this dataset is that some data are not correct. For example, we found some score to be negative, which does not make any sense. However, mistakes are common to any dataset; we do not find in this dataset the mistakes degrades the data quality much.
+
+Overall, the quality of the data is great, with only small percentage of missing data, most of which are explainable. The NYC Open Data website, and DOHMH provides clear and detailed information on this dataset, including the description of each column of the dataset. DOHMH provides extensive explanation on the inspection process and violation descriptions, which are useful in exploring the dataset.
+
+# 4. Main Analysis (Exploratory Data Analysis)
+
+## Score Distribution
+
+We are interested in how well does New York restaurant perform in hygiene inspections.
+
+First we want to look at the distribution of scores of all the inspections. We start from the raw data, grouping by the restaurant ID and inspection date. Each row in the resulting dataframe, thus, represents an inspection, not a restaurant. In the dataset, a restaurant can have more than one inspections.
+
+The following bar chart shows the distribution of all inspections. We exclude negative scores, which are incorrect. Most of the scores are below 50. There are some outliers with close to 150, which means these restaurant has severe violations against hygiene regulations. In most inspections, restaurant has rather good hygiene conditions. The data appear to be right skewed. We decide to remove outliers and look closely at the score distributions when the score is low.
+
+
+```{r}
+score <- raw %>% group_by(CAMIS, INSPECTION.DATE) %>%
+  na.omit() %>% summarise(Score = first(SCORE))
+
+score_pos <- score %>% filter(Score >= 0)
+
+ggplot(score, aes(Score)) +
+  geom_bar(width = 0.8, fill = "blue")
+```
+
+We removed scores higher than 35, which is a pretty bad score. A restaurant will be graded C, if it receives a score higher than 28 in the re-inspection.
+
+In general, the restaurant in New York City performs well, since most of the inspections end up with a low score (e.g. below 20). This also corresponds to the fact that most of the grade we see in restaurants are A. The peak of score is 12. Most score fall into A range. We observe a great drop between score 13 and 14, which we will discuss in details in part 5 of this project.
+
+```{r}
+score_35 <- score_pos %>% filter(Score < 35)
+
+ggplot(score_35, aes(Score)) +
+  geom_bar(width = 0.9, fill = 'blue')
+```
+
+## Grade Distribution
+
+We are interested in how restaurant perform in terms of grade.
+
+In order to measure the grade distribution, we first exclude all the P and Z grade, which means pending, and all missing grade. From the bar chart below, we observe most grades are A, meaning most restaurants perform well, which is similar to what we found in score distribution.
+
+```{r}
+grade_temp <- score_pos %>% mutate(Grade = ifelse(Score <= 13, "A", ifelse(Score <= 27, "B", "C")))
+```
+
+```{r}
+grade_nonempty <- raw %>% filter(GRADE != "") %>% 
+  filter(GRADE != "G") %>%
+  filter(GRADE %in% c("A", "B", "C")) %>%
+  group_by(CAMIS, INSPECTION.DATE) %>% 
+  summarise(Grade = first(GRADE))
+
+ggplot(grade_nonempty, aes(Grade)) +
+  geom_bar(width = 0.6, fill="blue") + 
+  ggtitle("Real Grade Distribution")
+```
+
+## Grade Distribution by Boroughs
+
+We are interested in how the grade distribution is different across five boroughs of the New York City.
+
+There seems to be not an obvious differences of grade distributions between boroughs, after we set the scale to be free_y. In fact the percentage of each grade is close across each borough.
+
+```{r}
+
+ref <- raw %>% group_by(CAMIS, INSPECTION.DATE) %>%
+  na.omit() %>% summarise(S = first(SCORE), B = first(BORO), TYP = first(CUISINE.DESCRIPTION), Grade = first(GRADE), Name = first(DBA))
+
+ref_nonempty <- ref %>% filter(Grade %in% c("A", "B", "C"))
+
+ggplot(ref_nonempty, aes(Grade)) +
+  geom_bar(width = 0.5, fill = "blue") +
+  facet_wrap(~B, scales = "free_y")
+
+```
+
+## Type of Restaurants
+
+We are interested in how grade distribution is different for types of restaurants.
+
+Since there are a lot types of restaurants, some type of restaurant has grade distribution a bit different from the rest of the types. For example, African and Bangladeshi restaurant performs not that well compare to others, while coffee/tea, soup and hamburger restaurant performs better than others. These differences are not huge, since most restaurants still do well in inspections. A is the most prevalent grade for any kind of restaurant.
+
+```{r, fig.width=7, fig.height=50}
+ggplot(ref_nonempty, aes(Grade)) +
+  geom_bar(width = 0.5, fill="blue") +
+  facet_wrap(~TYP, scales = "free_y", ncol = 3)
+```
+
+## Time Series Analysis
+
+We are interested in how number of inspections change over time.
+
+We group by month and restaurant ID and then define our new variable inspections. Then we draw a line graph with inspections as y axis and time as x axis.
+
+From the first graph, we notice that there are few inspections before 2014. Afterwards, the inspections gradually increase. Since end of 2017, the number of inspections has been greatly increasing. One possible reason is that there are many restaurants opened recently. Another possible explanation is that DOHMH decides to increase the inspections rate, since the time between inspections are flexible.
+
+
+```{r}
+data_frame <- data.frame(raw$CAMIS, raw$INSPECTION.DATE)
+
+# For each row of data, create three new variables of time format %Y%m, weekday and month.
+data_frame$year_month <- strftime(as.Date(data_frame$raw.INSPECTION.DATE, "%m/%d/%Y"), "%Y%m")
+data_frame$weekday <- weekdays(as.Date(data_frame$raw.INSPECTION.DATE, "%m/%d/%Y"))
+data_frame$month <- months(as.Date(data_frame$raw.INSPECTION.DATE, "%m/%d/%Y"))
+
+# Remove the outliers with inspection date /01/01/1900.
+data_frame <- data_frame[data_frame$year_month>190001, ]
+```
+
+```{r}
+# Group by restaurants and time so that we have unique row of data for each inspection.
+intermediate_1_year_month <- summarize(group_by(data_frame, year_month, raw.CAMIS), count=1)
+intermediate_2_year_month <- summarize(group_by(intermediate_1_year_month, year_month), inspections=n())
+
+# Order by time.
+df_year_month <- intermediate_2_year_month
+df_year_month <- df_year_month[order(as.Date(df_year_month$year_month, format="%Y%m")),]
+
+```
+
+```{r}
+ticks <- character(63)
+for(i in 1:63) {
+  ticks[i] <- ''
+}
+ticks[1] <- 2013
+for(i in 1:5) {
+  ticks[i*12] <- 2013 + i
+}
+ggplot(data=df_year_month, aes(x=year_month, y=inspections, group=1)) +
+  geom_line(color="lightgreen") +
+  scale_x_discrete(labels=ticks) +
+  geom_area(fill='lightblue', alpha=0.3) +
+  xlab('time') +
+  ylab("number of inspections")
+```
+
+In the second graph, which is inspections over months, we could see that first quarter of years has more inspections than rest quarters. Months of rest quarters have similar amount of inspections around 7000.
+
+
+```{r}
+# Group by restaurants and time so that we have unique row of data for each inspection.
+intermediate_1_month <- summarize(group_by(data_frame, month, raw.CAMIS), count=1)
+intermediate_2_month <- summarize(group_by(intermediate_1_month, month), inspections=n())
+
+# Order by month
+df_month <- intermediate_2_month
+df_month$month <- factor(df_month$month,levels = c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"))
+```
+
+```{r}
+ggplot(data=df_month, aes(x=month, y=inspections, group=1)) +
+  geom_line(color="lightgreen") +
+  geom_area(fill='lightblue', alpha=0.3) +
+  xlab("months") +
+  ylab("number of inspections")
+```
+
+The third graph shows how number of inspections change over a week. Weekdays have most inspections, since inspectors take breaks at weekends. We could also find that Friday has less inspections than other weekdays.
+
+```{r}
+# Group by restaurants and time so that we have unique row of data for each inspection.
+intermediate_1_weekday <- summarize(group_by(data_frame, weekday, raw.CAMIS), count=1)
+intermediate_2_weekday <- summarize(group_by(intermediate_1_weekday, weekday), inspections=n())
+
+# Order by weekday
+df_weekday <- intermediate_2_weekday
+df_weekday$weekday <- factor(df_weekday$weekday,levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+```
+
+```{r}
+ggplot(data=df_weekday, aes(x=weekday, y=inspections, group=1)) +
+  geom_line(color="lightgreen") +
+  geom_area(fill='lightblue', alpha=0.3) +
+  xlab("weekdays") +
+  ylab("number of inspections")
+```
+
+
+## Violation types
+
+The dataset includes three columns that describes details of hygiene violations. The first column is critical flag for violations that may result in foodborne illness. The other two columns are violation code and detail descriptions of violations.
+
+In this section we look at the each violations. In a inspection, there are probably more than one violations, so the count (y-axis) in the following bar chart are much larger than the ones appears above. 
+
+### Critiacal Flag
+
+The number of critical violations are more than the non-critical violations.
+
+```{r}
+raw_crit <- raw %>% filter(CRITICAL.FLAG %in% c("Critical", "Not Critical"))
+
+ggplot(raw_crit, aes(CRITICAL.FLAG)) +
+  geom_bar(width = 0.6, fill="blue")
+
+```
+
+
+### Violation Code
+
+For the details of violations, the following bar chart shows the sorted count of violations. Most common violations are minor. 10F means non-food surface improperly constructed or maintained. 08A means there is non-vermin proof evidence. 04C indicates there is evidence of mice. Violation in the 06 categories means there are potential source of contamination in the restaurant. Most common violations in inspections are potential hazard or lack of evidence for a clean environment, but they are not severe problems.
+
+```{r, fig.width=5, fig.height=10}
+
+vio_code <- raw %>% filter(VIOLATION.CODE != "") %>%
+  group_by(VIOLATION.CODE) %>% summarise(Count = n())
+
+ggplot(vio_code, aes(reorder(VIOLATION.CODE, Count), Count)) +
+  xlab("count") +
+  geom_col(fill = "blue") +
+  coord_flip()
+```
+
+## Case Study: Fast food chains (McDonald's, Domino's, and Subway)
+
+After studying general patterns of inspections in New York City, we want to investigate more closely at fast food chains. The three restaurants we choose are McDonald's, Domino's and Subway.
+
+At the first glance of the bar chart below, which shows grade distribution for the three chains. McDonald's and Subway perform better in hygiene inspections. McDonald's is the best, although its grades are not that different from Subway. Another amusing fact is that the amount of these restaurant differs a lot. There are about 1000 Subways, 700 McDonald's and 300 Domino's in New York City.
+
+```{r}
+case <- ref %>% filter(Name %in% c("SUBWAY", "MCDONALD'S", "DOMINO'S")) %>%
+  filter(Grade %in% c("A", "B", "C"))
+
+ggplot(case, aes(Grade)) +
+  geom_bar(fill="blue") +
+  facet_wrap(~Name, scales = "free_y")
+```
+
+The score distribution (for score below 30) of the three restaurant shows similar patterns we found above.
+
+```{r}
+case_score <- case %>% filter(S < 30)
+
+ggplot(case_score, aes(S)) +
+  geom_bar(fill="blue") +
+  facet_wrap(~Name, scales = "free_y") +
+  xlab("Score")
+```
+
+The next three bar chart shows the grade distribution of three fast chain restaurants in different boroughs. For each company, we do not found there is a particular difference of grade distribution between different boroughs.
+
+### Subway
+
+```{r}
+
+subway <- case %>% filter(Name == "SUBWAY")
+domino <- case %>% filter(Name == "DOMINO'S")
+mc <- case %>% filter(Name == "MCDONALD'S")
+
+ggplot(subway, aes(Grade)) +
+  geom_bar(fill="blue") +
+  facet_wrap(~B, scales = "free_y") +
+  xlab("Grade")
+```
+
+### Domino's
+
+```{r}
+ggplot(domino, aes(Grade)) +
+  geom_bar(fill="blue") +
+  facet_wrap(~B, scales = "free_y") +
+  xlab("Grade")
+```
+
+### McDonald's
+
+```{r}
+ggplot(mc, aes(Grade)) +
+  geom_bar(fill="blue") +
+  facet_wrap(~B, scales = "free_y") +
+  xlab("Grade")
+```
+
+# 5. Executive Summary (Presentation-Style)
+
+## Introduction
+
+Hygiene condition is an important factor to consider when people choose to have meals in restaurants, but customers usually find its hard to figure out the hygiene conditions of a restaurant. Nevertheless, the New York City Department of Mental of Health and Mental Hygiene (DOHMH) provides a grading system to assess the hygiene condition of restaurants. The hygiene grades usually appear at some obvious place of the restaurants. It is usually an A, and sometimes are B and C. 
+
+This simple grade turns out to depend on a complicated inspection and scoring system. Every restaurant in the New York city is scheduled for unannounced inspections at least once a year. An inspector checks restaurant's compliance with food safety regulations of the city and the state, marking points for any violations. The lower the total score is, the cleaner the restaurant is. In the initial inspection, the restaurant will receive a grade of A if the score is below or equal to 13. Otherwise, there will be a re-inspection shortly after the initial one. During the re-inspection, the restaurant will receive an A if the score is in range of 0 to 13, a B if the score is in range of 14 to 28, and a C if the score is higher than 28. The time of next inspection for a restaurant after receiving a grade is based on the score of the initial inspection. During any inspection, if there is uncorrected public hazard found, DOHMH can force a restaurant to close.
+
+The NYC open data website provides a great dataset on records of restaurant inspections and violations. Most these records come from inspections in 2015 to 2018. Through exploring this dataset, we want to find how well do New York City restaurants perform in inspections.
+
+## How does the score distribution look like?
+
+The following bar chart shows the score distributions of inspections. We removed scores higher than 40. Score range of the grade are shown in different color. There is an interesting pattern in the bar chart below. A great drop appears between 13 and 14, which is the borderline between grade A and grade B. This is somewhat comparable to the rounding situation discussed in class. In some sense, Grade B is rounded to Grade A here. A possible explanation is that the inspectors may give a score of 13 or 12, even if there is one or two more violations that could make the score higher. For scores in A range (0 to 13), there is an increasing trend of the count as the score increases. The count peaks at 12.  At the start of B range (14 to 28), there is a slow increasing. After score 20, the count is decreasing. Since a score lower than 14 will lead to an A grade, from the bar chart, there is a clear propensity of giving an A-range score in an inspection. Otherwise, it is hard to explain this drop between 13 and 14.
+
+In general, the restaurant in New York City performs well, since most of the inspections end up with a low score (e.g. below 20). This also corresponds to the fact that most of the grade we see in restaurants are A.
+
+```{r}
+library(viridis)
+library(ggthemes)
+
+grade_temp_40 <- grade_temp %>% filter(Score < 40)
+
+ggplot(grade_temp_40, aes(Score, fill = Grade)) +
+  geom_bar(width = 0.9) +
+  ggtitle("Score Distribution of Inspections of NYC restaurant") +
+  theme_grey(15) +
+  scale_fill_viridis(discrete = TRUE)
+```
+
+## How does the grade distribution look like?
+
+We are interested in how restaurant improve between inspections by looking at grade distributions.
+
+We only look at grade A, B and C in this project, ignoring P and Z, which mean pending. Other than these grades, there might be no grade at all, which is the situation that in the initial inspection, the score is higher than 13.
+
+Nevertheless, we could give this initial inspections a grade according to the score. The first bar chart below shows that what would the grade distribution look like if we give a grade to every inspection. It is not interesting to look at this graph alone, but when we compare it to the real grade distribution chart, we found the grade is much improved.
+
+One explanation for this is that restaurant will improve the hygiene condition or annihilate possible hygiene problems after the initial inspection, especially in the case that the initial grade was not good.
+
+Another reason maybe in the re-inspections, inspectors may be not that strict, and more willing to give an A grade. The purpose of the initial inspection may be educational, so that the restaurant can improve the hygiene condition.
+
+We think inspections in general will encourage the restaurant to improve their hygiene conditions.
+
+```{r}
+ggplot(grade_temp, aes(Grade, fill = Grade)) +
+  geom_bar(width = 0.6) +
+  ggtitle("Grade Distribution if Every Inspection is Assigned a Score") +
+  theme_grey(14) +
+  scale_fill_viridis(discrete = TRUE)
+```
+```{r}
+ggplot(grade_nonempty, aes(Grade, fill = Grade)) +
+  geom_bar(width = 0.6) + 
+  ggtitle("Real Grade Distribution")  +
+  theme_grey(14) +
+  scale_fill_viridis(discrete = TRUE)
+```
+
+## Which fast food chain is the cleanest?
+
+As we look at the grade distribution for three fast food chains, Domino's, McDonald's and Subway, McDonald's preforms best in hygiene inspections. There is not a big difference between McDonald's and Subway. Domino's seems to be the worst among the three, but it does not mean that it has a bad hygiene condition. In fact, the performance of Domino's in inspections is similar to the average of NYC restaurants.
+
+Fast food chains, in general, has excellent hygiene conditions. These companies usually have more formal procedures and are careful in dealing with hygiene issues. If you are a pizza fan, you probably still want to go to Domino's, although it appears to be the worst among the three fast food chains. When all the restaurants do well in hygiene inspections, other factors like taste, price and preference become more of a consideration in choosing the restaurant.
+
+```{r}
+ggplot(case, aes(Grade, fill = Grade)) +
+  geom_bar() +
+  facet_wrap(~Name, scales = "free_y")+
+  theme_grey(14) +
+  ggtitle("Grade Distribution for Fast Food Chains") +
+  scale_fill_viridis(discrete = TRUE)
+```
+
+## Conclusion
+
+The insight we gained from investigating the data is similar to what we observe when we walk into restaurants. Most restaurants earn A grade. The inspection serves well as a correctional and educational measurement. Fast food chains appear to have better performance than average in terms of hygiene conditions. The restaurants in NYC generally preform well in hygiene inspections.
+
+# 6. Interactive Component
+
+We created this interactive data visualization tool with shiny
+
+[link to the interactive part here](https://edav-final-project.shinyapps.io/final_project/)
+
+[source code](https://github.com/Ironaki/EDAV-Project/blob/master/app.R)
+
+Users can choose a restaurant (SUBWAY, DOMINO'S or MCDONALD'S) and then choose a metrics (Score or Grade) using the right panel to get the inspection result histogram of grade distribution shown on the right panel.
+
+Technical execution: we would try to show the results on a map of NYC which will make the results more intuitive. We would also try different kind of graph to show the results.
+
+# 7. Conclusion
+
+Since the quality of the dataset is good, it is rather easy to apply the technique we learned from class.  In general, we have found the hygiene condition of NYC restaurant are excellent.
+
+Limitations on the project:
+
+1. We only use one dataset thus the results we get might have some bias and we might used the improper way to deal with the missing data/strange data which give us some wrong results.
+
+2. We do not have enough data for the early years (before 2014) to help us draw very convincing conclusions.
+
+3. We have made some casual conclusions just based on the visualization. It is hard to verify them.
+
+4. The dataset provides limited information, which is something we wanted to look into.
+
+Future directions and possible studies: 
+
+1. We can collect NYC news on the food safety in the past years, and try to find the relevance between those news and the records in our dataset.
+
+2. We can interview some students and teachers to see whether their feeling about the restaurants is the same as the results we found.
+
+3. We can ask experts, or do research to explain why some kinds of violation are more likely to happen than others.
+
